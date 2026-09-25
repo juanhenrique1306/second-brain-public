@@ -1,3 +1,5 @@
+name: second-brain
+
 services:
 
   # =========================================================
@@ -47,8 +49,6 @@ services:
     networks:
       - second-brain-net
 
-    # Não é necessário expor publicamente.
-    # Útil apenas para debug local.
     ports:
       - "127.0.0.1:6333:6333"
       - "127.0.0.1:6334:6334"
@@ -67,7 +67,7 @@ services:
 
   # =========================================================
   # Brain API
-  # FastAPI responsável pelas consultas, RAG e integração IA
+  # FastAPI responsável por busca, RAG e integração com IA
   # =========================================================
   brain-api:
     build:
@@ -83,7 +83,7 @@ services:
       BRAIN_API_KEY: ${BRAIN_API_KEY}
 
       # Qdrant
-      QDRANT_URL: http://qdrant:6333
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-second_brain}
 
       # Embeddings
@@ -98,6 +98,18 @@ services:
 
       # Hugging Face
       HF_HOME: /models/huggingface
+
+      # Busca
+      SEARCH_LIMIT: ${SEARCH_LIMIT:-20}
+      MAX_RESULTS: ${MAX_RESULTS:-5}
+
+      # Thresholds
+      MIN_ADJUSTED_SCORE: ${MIN_ADJUSTED_SCORE:-0.82}
+      DUPLICATE_SCORE_THRESHOLD: ${DUPLICATE_SCORE_THRESHOLD:-0.87}
+      MEMORY_CANDIDATE_THRESHOLD: ${MEMORY_CANDIDATE_THRESHOLD:-0.80}
+
+      # Memória
+      MEMORY_NOTE_MAX_CHARS: ${MEMORY_NOTE_MAX_CHARS:-30000}
 
     volumes:
       - ${VAULT_PATH:-./data/vault}:/vault
@@ -140,7 +152,7 @@ services:
 
     environment:
       # Qdrant
-      QDRANT_URL: http://qdrant:6333
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-second_brain}
 
       # Vault
@@ -148,6 +160,13 @@ services:
 
       # Embeddings
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
+
+      # Chunking
+      CHUNK_SIZE: ${CHUNK_SIZE:-1200}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+
+      # Collection
+      RECREATE_COLLECTION: ${RECREATE_COLLECTION:-false}
 
       # Hugging Face
       HF_HOME: /models/huggingface
@@ -174,31 +193,25 @@ services:
     restart: unless-stopped
 
     environment:
-
-      # -----------------------------------------------------
       # PostgreSQL
-      # -----------------------------------------------------
       DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: postgres
-      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_HOST: ${POSTGRES_HOST:-postgres}
+      DB_POSTGRESDB_PORT: ${POSTGRES_PORT:-5432}
       DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
 
-      # -----------------------------------------------------
       # n8n
-      # -----------------------------------------------------
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
 
       N8N_HOST: ${N8N_HOST}
-      N8N_PROTOCOL: https
-      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-https}
+      N8N_PORT: ${N8N_PORT:-5678}
 
-      N8N_EDITOR_BASE_URL: https://${N8N_HOST}/
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL}
 
-      N8N_WEBHOOK_URL: https://${PUBLIC_WEBHOOK_HOST}/
-
-      N8N_PROXY_HOPS: 1
+      N8N_PROXY_HOPS: ${N8N_PROXY_HOPS:-1}
 
       GENERIC_TIMEZONE: ${TZ:-America/Sao_Paulo}
       TZ: ${TZ:-America/Sao_Paulo}
@@ -218,16 +231,8 @@ services:
         condition: service_healthy
 
     labels:
-
-      # =====================================================
-      # Traefik
-      # =====================================================
       - "traefik.enable=true"
-
-      # -----------------------------------------------------
-      # Rede utilizada pelo Traefik
-      # -----------------------------------------------------
-      - "traefik.docker.network=proxy"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
 
       # =====================================================
       # Webhooks públicos
@@ -245,7 +250,7 @@ services:
       # =====================================================
       # Interface privada do n8n
       # =====================================================
-      - "traefik.http.routers.second-brain-n8n.rule=Host(`${N8N_HOST}`)"
+      - "traefik.http.routers.second-brain-n8n.rule=Host(`${PRIVATE_N8N_HOST}`)"
 
       - "traefik.http.routers.second-brain-n8n.entrypoints=websecure"
 
@@ -255,22 +260,16 @@ services:
 
       - "traefik.http.routers.second-brain-n8n.service=second-brain-n8n"
 
-      # -----------------------------------------------------
-      # Middleware de acesso privado
-      #
-      # Exemplo:
-      # 192.168.1.0/24 = LAN
-      # 10.8.0.0/24    = VPN
-      #
-      # Ajuste conforme sua infraestrutura.
-      # -----------------------------------------------------
+      # =====================================================
+      # Allowlist LAN / VPN
+      # =====================================================
       - "traefik.http.middlewares.second-brain-internal-allow.ipallowlist.sourcerange=${N8N_ALLOWED_NETWORKS:-192.168.1.0/24,10.8.0.0/24}"
 
       - "traefik.http.routers.second-brain-n8n.middlewares=second-brain-internal-allow"
 
-      # -----------------------------------------------------
+      # =====================================================
       # Porta interna do n8n
-      # -----------------------------------------------------
+      # =====================================================
       - "traefik.http.services.second-brain-n8n.loadbalancer.server.port=5678"
 
 
@@ -283,7 +282,6 @@ networks:
     name: second-brain-net
     driver: bridge
 
-  # Rede compartilhada com um Traefik já existente.
   proxy:
     external: true
     name: ${TRAEFIK_NETWORK:-proxy}
