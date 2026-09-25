@@ -1,0 +1,4 @@
+qdrant-client
+sentence-transformers
+watchdog
+python-frontmatter
