@@ -1,0 +1,289 @@
+services:
+
+  # =========================================================
+  # PostgreSQL
+  # Banco utilizado pelo n8n
+  # =========================================================
+  postgres:
+    image: postgres:17
+    container_name: second-brain-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - ${POSTGRES_DATA_PATH:-./data/postgres}:/var/lib/postgresql/data
+
+    networks:
+      - second-brain-net
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # Qdrant
+  # Banco vetorial utilizado para armazenar embeddings
+  # =========================================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: second-brain-qdrant
+    restart: unless-stopped
+
+    volumes:
+      - ${QDRANT_DATA_PATH:-./data/qdrant}:/qdrant/storage
+
+    networks:
+      - second-brain-net
+
+    # Não é necessário expor publicamente.
+    # Útil apenas para debug local.
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
+  # =========================================================
+  # Brain API
+  # FastAPI responsável pelas consultas, RAG e integração IA
+  # =========================================================
+  brain-api:
+    build:
+      context: ../brain-api
+      dockerfile: Dockerfile
+
+    image: second-brain-api:latest
+    container_name: second-brain-api
+    restart: unless-stopped
+
+    environment:
+      # API
+      BRAIN_API_KEY: ${BRAIN_API_KEY}
+
+      # Qdrant
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-second_brain}
+
+      # Embeddings
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
+
+      # Gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+
+      # Vault
+      VAULT_PATH: /vault
+
+      # Hugging Face
+      HF_HOME: /models/huggingface
+
+    volumes:
+      - ${VAULT_PATH:-./data/vault}:/vault
+      - ${HF_MODELS_PATH:-./data/models/huggingface}:/models/huggingface
+
+    networks:
+      - second-brain-net
+
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+    ports:
+      - "127.0.0.1:${BRAIN_API_PORT:-8000}:8000"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+
+  # =========================================================
+  # Brain Indexer
+  # Monitora o Vault e envia embeddings para o Qdrant
+  # =========================================================
+  brain-indexer:
+    build:
+      context: ../brain-indexer
+      dockerfile: Dockerfile
+
+    image: second-brain-indexer:latest
+    container_name: second-brain-indexer
+    restart: unless-stopped
+
+    environment:
+      # Qdrant
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-second_brain}
+
+      # Vault
+      VAULT_PATH: /vault
+
+      # Embeddings
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
+
+      # Hugging Face
+      HF_HOME: /models/huggingface
+
+    volumes:
+      - ${VAULT_PATH:-./data/vault}:/vault:ro
+      - ${HF_MODELS_PATH:-./data/models/huggingface}:/models/huggingface
+
+    networks:
+      - second-brain-net
+
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+
+  # =========================================================
+  # n8n
+  # Orquestra Telegram -> Brain API -> Telegram
+  # =========================================================
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: second-brain-n8n
+    restart: unless-stopped
+
+    environment:
+
+      # -----------------------------------------------------
+      # PostgreSQL
+      # -----------------------------------------------------
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+
+      # -----------------------------------------------------
+      # n8n
+      # -----------------------------------------------------
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+      N8N_HOST: ${N8N_HOST}
+      N8N_PROTOCOL: https
+      N8N_PORT: 5678
+
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}/
+
+      N8N_WEBHOOK_URL: https://${PUBLIC_WEBHOOK_HOST}/
+
+      N8N_PROXY_HOPS: 1
+
+      GENERIC_TIMEZONE: ${TZ:-America/Sao_Paulo}
+      TZ: ${TZ:-America/Sao_Paulo}
+
+    volumes:
+      - ${N8N_DATA_PATH:-./data/n8n}:/home/node/.n8n
+
+    networks:
+      - second-brain-net
+      - proxy
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      brain-api:
+        condition: service_healthy
+
+    labels:
+
+      # =====================================================
+      # Traefik
+      # =====================================================
+      - "traefik.enable=true"
+
+      # -----------------------------------------------------
+      # Rede utilizada pelo Traefik
+      # -----------------------------------------------------
+      - "traefik.docker.network=proxy"
+
+      # =====================================================
+      # Webhooks públicos
+      # =====================================================
+      - "traefik.http.routers.second-brain-webhooks.rule=Host(`${PUBLIC_WEBHOOK_HOST}`) && (PathPrefix(`/webhook/`) || PathPrefix(`/webhook-test/`))"
+
+      - "traefik.http.routers.second-brain-webhooks.entrypoints=websecure"
+
+      - "traefik.http.routers.second-brain-webhooks.tls=true"
+
+      - "traefik.http.routers.second-brain-webhooks.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-myresolver}"
+
+      - "traefik.http.routers.second-brain-webhooks.service=second-brain-n8n"
+
+      # =====================================================
+      # Interface privada do n8n
+      # =====================================================
+      - "traefik.http.routers.second-brain-n8n.rule=Host(`${N8N_HOST}`)"
+
+      - "traefik.http.routers.second-brain-n8n.entrypoints=websecure"
+
+      - "traefik.http.routers.second-brain-n8n.tls=true"
+
+      - "traefik.http.routers.second-brain-n8n.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-myresolver}"
+
+      - "traefik.http.routers.second-brain-n8n.service=second-brain-n8n"
+
+      # -----------------------------------------------------
+      # Middleware de acesso privado
+      #
+      # Exemplo:
+      # 192.168.1.0/24 = LAN
+      # 10.8.0.0/24    = VPN
+      #
+      # Ajuste conforme sua infraestrutura.
+      # -----------------------------------------------------
+      - "traefik.http.middlewares.second-brain-internal-allow.ipallowlist.sourcerange=${N8N_ALLOWED_NETWORKS:-192.168.1.0/24,10.8.0.0/24}"
+
+      - "traefik.http.routers.second-brain-n8n.middlewares=second-brain-internal-allow"
+
+      # -----------------------------------------------------
+      # Porta interna do n8n
+      # -----------------------------------------------------
+      - "traefik.http.services.second-brain-n8n.loadbalancer.server.port=5678"
+
+
+# ===========================================================
+# Networks
+# ===========================================================
+networks:
+
+  second-brain-net:
+    name: second-brain-net
+    driver: bridge
+
+  # Rede compartilhada com um Traefik já existente.
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-proxy}
