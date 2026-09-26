@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+
+  python-validation:
+    name: Python validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate Brain API syntax
+        run: |
+          python -m py_compile brain-api/app.py
+
+      - name: Validate Brain Indexer syntax
+        run: |
+          python -m py_compile brain-indexer/index_vault.py
+          python -m py_compile brain-indexer/watch_indexer.py
+
+      - name: Validate Indexer test scripts syntax
+        run: |
+          python -m py_compile brain-indexer/tests/create_test_index.py
+          python -m py_compile brain-indexer/tests/semantic_search_test.py
+
+
+  compose-validation:
+    name: Docker Compose validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create CI environment file
+        run: |
+          cp .env.example .env
+
+      - name: Create required directories
+        run: |
+          mkdir -p \
+            data/vault \
+            data/qdrant \
+            data/postgres \
+            data/n8n \
+            data/models/huggingface
+
+      - name: Create external proxy network
+        run: |
+          docker network create proxy || true
+
+      - name: Validate Docker Compose
+        run: |
+          docker compose \
+            --env-file .env \
+            -f compose/docker-compose.example.yml \
+            config
+
+
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs:
+      - python-validation
+      - compose-validation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Brain API
+        run: |
+          docker build \
+            -t second-brain-api:ci \
+            ./brain-api
+
+      - name: Build Brain Indexer
+        run: |
+          docker build \
+            -t second-brain-indexer:ci \
+            ./brain-indexer
