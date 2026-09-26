@@ -52,7 +52,7 @@ O container espera o Vault em:
 O caminho do host deve ser definido separadamente no Compose por uma variável de storage, por exemplo:
 
 ```env
-VAULT_DATA_PATH=./data/vault
+VAULT_DATA_PATH=../data/vault
 ```
 
 Evite usar a mesma variável para representar simultaneamente o caminho do host e o caminho interno do container.
