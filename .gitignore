@@ -5,7 +5,6 @@
 vault/
 qdrant/
 postgres/
-n8n/
 models/
 
 *.db
