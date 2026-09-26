@@ -17,7 +17,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
     volumes:
-      - ${POSTGRES_DATA_PATH:-./data/postgres}:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_PATH:-../data/postgres}:/var/lib/postgresql/data
 
     networks:
       - second-brain-net
@@ -44,11 +44,12 @@ services:
     restart: unless-stopped
 
     volumes:
-      - ${QDRANT_DATA_PATH:-./data/qdrant}:/qdrant/storage
+      - ${QDRANT_DATA_PATH:-../data/qdrant}:/qdrant/storage
 
     networks:
       - second-brain-net
 
+    # Debug/acesso somente pelo próprio host
     ports:
       - "127.0.0.1:6333:6333"
       - "127.0.0.1:6334:6334"
@@ -79,41 +80,66 @@ services:
     restart: unless-stopped
 
     environment:
+
+      # -----------------------------------------------------
       # API
+      # -----------------------------------------------------
       BRAIN_API_KEY: ${BRAIN_API_KEY}
 
+      # -----------------------------------------------------
       # Qdrant
+      # -----------------------------------------------------
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-second_brain}
 
+      # -----------------------------------------------------
       # Embeddings
+      # -----------------------------------------------------
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
 
+      # -----------------------------------------------------
       # Gemini
+      # -----------------------------------------------------
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
 
+      # -----------------------------------------------------
       # Vault
-      VAULT_PATH: /vault
+      # Caminho interno do container
+      # -----------------------------------------------------
+      VAULT_PATH: ${VAULT_PATH:-/vault}
 
+      # -----------------------------------------------------
       # Hugging Face
+      # -----------------------------------------------------
       HF_HOME: /models/huggingface
 
+      # -----------------------------------------------------
       # Busca
+      # -----------------------------------------------------
       SEARCH_LIMIT: ${SEARCH_LIMIT:-20}
       MAX_RESULTS: ${MAX_RESULTS:-5}
 
+      # -----------------------------------------------------
       # Thresholds
+      # -----------------------------------------------------
       MIN_ADJUSTED_SCORE: ${MIN_ADJUSTED_SCORE:-0.82}
       DUPLICATE_SCORE_THRESHOLD: ${DUPLICATE_SCORE_THRESHOLD:-0.87}
       MEMORY_CANDIDATE_THRESHOLD: ${MEMORY_CANDIDATE_THRESHOLD:-0.80}
 
+      # -----------------------------------------------------
       # Memória
+      # -----------------------------------------------------
       MEMORY_NOTE_MAX_CHARS: ${MEMORY_NOTE_MAX_CHARS:-30000}
 
     volumes:
-      - ${VAULT_PATH:-./data/vault}:/vault
-      - ${HF_MODELS_PATH:-./data/models/huggingface}:/models/huggingface
+
+      # Vault real no host -> /vault no container
+      # Brain API precisa de escrita caso /memory/write seja usado
+      - ${VAULT_DATA_PATH:-../data/vault}:/vault
+
+      # Cache persistente do Hugging Face
+      - ${HF_MODELS_PATH:-../data/models/huggingface}:/models/huggingface
 
     networks:
       - second-brain-net
@@ -122,6 +148,7 @@ services:
       qdrant:
         condition: service_healthy
 
+    # API disponível somente no host
     ports:
       - "127.0.0.1:${BRAIN_API_PORT:-8000}:8000"
 
@@ -151,29 +178,46 @@ services:
     restart: unless-stopped
 
     environment:
+
+      # -----------------------------------------------------
       # Qdrant
+      # -----------------------------------------------------
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-second_brain}
 
+      # -----------------------------------------------------
       # Vault
-      VAULT_PATH: /vault
+      # -----------------------------------------------------
+      VAULT_PATH: ${VAULT_PATH:-/vault}
 
+      # -----------------------------------------------------
       # Embeddings
+      # -----------------------------------------------------
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
 
+      # -----------------------------------------------------
       # Chunking
+      # -----------------------------------------------------
       CHUNK_SIZE: ${CHUNK_SIZE:-1200}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
 
+      # -----------------------------------------------------
       # Collection
+      # -----------------------------------------------------
       RECREATE_COLLECTION: ${RECREATE_COLLECTION:-false}
 
+      # -----------------------------------------------------
       # Hugging Face
+      # -----------------------------------------------------
       HF_HOME: /models/huggingface
 
     volumes:
-      - ${VAULT_PATH:-./data/vault}:/vault:ro
-      - ${HF_MODELS_PATH:-./data/models/huggingface}:/models/huggingface
+
+      # Indexador somente precisa ler o Vault
+      - ${VAULT_DATA_PATH:-../data/vault}:/vault:ro
+
+      # Compartilha o cache do modelo com a API
+      - ${HF_MODELS_PATH:-../data/models/huggingface}:/models/huggingface
 
     networks:
       - second-brain-net
@@ -193,15 +237,21 @@ services:
     restart: unless-stopped
 
     environment:
+
+      # -----------------------------------------------------
       # PostgreSQL
+      # -----------------------------------------------------
       DB_TYPE: postgresdb
+
       DB_POSTGRESDB_HOST: ${POSTGRES_HOST:-postgres}
       DB_POSTGRESDB_PORT: ${POSTGRES_PORT:-5432}
       DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
 
+      # -----------------------------------------------------
       # n8n
+      # -----------------------------------------------------
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
 
       N8N_HOST: ${N8N_HOST}
@@ -213,17 +263,21 @@ services:
 
       N8N_PROXY_HOPS: ${N8N_PROXY_HOPS:-1}
 
+      # -----------------------------------------------------
+      # Timezone
+      # -----------------------------------------------------
       GENERIC_TIMEZONE: ${TZ:-America/Sao_Paulo}
       TZ: ${TZ:-America/Sao_Paulo}
 
     volumes:
-      - ${N8N_DATA_PATH:-./data/n8n}:/home/node/.n8n
+      - ${N8N_DATA_PATH:-../data/n8n}:/home/node/.n8n
 
     networks:
       - second-brain-net
       - proxy
 
     depends_on:
+
       postgres:
         condition: service_healthy
 
@@ -231,8 +285,13 @@ services:
         condition: service_healthy
 
     labels:
+
+      # =====================================================
+      # Traefik
+      # =====================================================
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
+
 
       # =====================================================
       # Webhooks públicos
@@ -247,6 +306,7 @@ services:
 
       - "traefik.http.routers.second-brain-webhooks.service=second-brain-n8n"
 
+
       # =====================================================
       # Interface privada do n8n
       # =====================================================
@@ -260,12 +320,14 @@ services:
 
       - "traefik.http.routers.second-brain-n8n.service=second-brain-n8n"
 
+
       # =====================================================
       # Allowlist LAN / VPN
       # =====================================================
       - "traefik.http.middlewares.second-brain-internal-allow.ipallowlist.sourcerange=${N8N_ALLOWED_NETWORKS:-192.168.1.0/24,10.8.0.0/24}"
 
       - "traefik.http.routers.second-brain-n8n.middlewares=second-brain-internal-allow"
+
 
       # =====================================================
       # Porta interna do n8n
@@ -278,10 +340,12 @@ services:
 # ===========================================================
 networks:
 
+  # Rede interna do Second Brain
   second-brain-net:
     name: second-brain-net
     driver: bridge
 
+  # Rede externa compartilhada com Traefik
   proxy:
     external: true
     name: ${TRAEFIK_NETWORK:-proxy}
